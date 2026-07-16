@@ -2,6 +2,7 @@
 
 // From AHNX-Translation-Core (this module is compiled into it as a submodule).
 #include "compat/loader.h"
+#include "compat/jni.h"   // JNIEnv, jobject, jboolean
 
 #include <switch.h>
 #include <cstdio>
@@ -87,27 +88,61 @@ UnityLaunchResult unityRun(const std::string& lib_dir, const std::string& apk_pa
     runJniOnLoad(libmain,  "libmain.so",  vm);
     runJniOnLoad(libunity, "libunity.so", vm);
 
-    // ── 3. Probe what we now have to work with, so the log tells us the exact
-    //       state before the parts that aren't built yet. ─────────────────────
+    // ── 3. Look up the registered player entry points ────────────────────────
+    // Unity registers these via RegisterNatives (not exported symbols), so we
+    // fetch them from the Core's registered-natives table. Signatures were
+    // recovered from libunity's method tables:
+    //   initJni(JNIEnv*, jobject, jobject context)            (Landroid/content/Context;)V
+    //   nativeRecreateGfxState(JNIEnv*, jobject, jint, jobject surface)  (ILandroid/view/Surface;)V
+    //   nativeSendSurfaceChangedEvent(JNIEnv*, jobject)       ()V
+    //   nativeRender(JNIEnv*, jobject) -> jboolean            ()Z
+    typedef void     (*InitJni_fn)(void*, void*, void*);
+    typedef jboolean (*Render_fn)(void*, void*);
+    auto initJni      = (InitJni_fn)jniFindRegisteredNative("initJni");
+    auto nativeRender = (Render_fn) jniFindRegisteredNative("nativeRender");
     void* il2cpp_init = libil2cpp->findSym("il2cpp_init");
-    void* nativeRender_export = libunity->findSym(
-        "Java_com_unity3d_player_UnityPlayer_nativeRender");
-    compatLogFmt("unity: probes — il2cpp_init=%p unity.nativeRender(exported)=%p",
-                 il2cpp_init, nativeRender_export);
-    compatLog("unity: NOTE nativeRender is normally NOT exported — it's registered "
-              "via RegisterNatives above; a null here is expected.");
+    compatLogFmt("unity: entry points — initJni=%p nativeRender=%p il2cpp_init=%p",
+                 (void*)initJni, (void*)nativeRender, il2cpp_init);
 
-    // ── 4. Stop honestly at the edge of what's implemented. ──────────────────
-    // Next milestones (see README): synthesize the com.unity3d.player.UnityPlayer
-    // Java class so its constructor path can run, drive UnityPlayer.init +
-    // il2cpp_init(+global-metadata.dat), stand up the GLES3 surface, then call
-    // the registered nativeRender in a loop.
+    if (!initJni) {
+        r.ok = false;
+        r.errorStage  = "Unity init entry (initJni not registered)";
+        r.errorDetail = "libunity ran JNI_OnLoad but didn't register initJni — can't "
+                        "start the player. See the RegisterNative lines in compat_log.txt.";
+        compatLog("unity: FATAL — initJni not found among registered natives");
+        return r;
+    }
+
+    // ── 4. Drive Unity's own init (M4/M5, in progress) ───────────────────────
+    // initJni forwards to the real init, which brings up the IL2CPP runtime and
+    // makes a flood of JNI callbacks into the Android Context/Activity we fake.
+    // Every FindClass/GetMethodID/CallXMethod it makes is logged by the Core's
+    // JNI env — so even when this faults, compat_log.txt becomes the exact list
+    // of Java framework surface Unity needs next. jobject 0x4001 is the same
+    // fake Activity the Core hands the cocos2d-x path.
+    JNIEnv* env = (JNIEnv*)compatGet()->env_outer;
+    void*   ctx = (void*)(uintptr_t)0x4001;   // fake Activity/Context
+    compatLog("unity: calling initJni(env, activity, context) — Unity init begins");
+    compatLogFlush();
+    initJni(env, ctx, ctx);
+    compatLog("unity: initJni returned (did not fault)");
+    compatLogFlush();
+
+    // If init survived, try one nativeRender to see how far the player loop gets
+    // before we've stood up a real GLES surface (expected to need
+    // nativeRecreateGfxState with a Surface first — this is purely diagnostic).
+    if (nativeRender) {
+        compatLog("unity: calling nativeRender() once (no surface yet — diagnostic)");
+        compatLogFlush();
+        jboolean cont = nativeRender(env, ctx);
+        compatLogFmt("unity: nativeRender returned %d", (int)cont);
+    }
+
     r.ok = false;
-    r.errorStage  = "Unity IL2CPP init (not yet implemented)";
-    r.errorDetail = "Unity libraries loaded and JNI_OnLoad ran — see compat_log.txt "
-                    "for the registered UnityPlayer natives. IL2CPP runtime init, the "
-                    "UnityPlayer Java shims, and the GLES render loop are the next "
-                    "milestones and aren't built yet.";
-    compatLog("═══ AHNX Unity Runtime: bringup reached JNI_OnLoad; IL2CPP init pending ═══");
+    r.errorStage  = "Unity player init (in progress)";
+    r.errorDetail = "initJni was driven — see compat_log.txt for the JNI callbacks Unity "
+                    "made and where it stopped. UnityPlayer/Activity Java shims and the "
+                    "GLES3 surface are the next milestones.";
+    compatLog("═══ AHNX Unity Runtime: initJni driven; see JNI callback trace above ═══");
     return r;
 }
