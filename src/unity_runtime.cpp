@@ -98,11 +98,15 @@ UnityLaunchResult unityRun(const std::string& lib_dir, const std::string& apk_pa
     //   nativeRender(JNIEnv*, jobject) -> jboolean            ()Z
     typedef void     (*InitJni_fn)(void*, void*, void*);
     typedef jboolean (*Render_fn)(void*, void*);
-    auto initJni      = (InitJni_fn)jniFindRegisteredNative("initJni");
-    auto nativeRender = (Render_fn) jniFindRegisteredNative("nativeRender");
+    typedef void     (*Gfx_fn)(void*, void*, jint, void*);  // nativeRecreateGfxState(env,thiz,id,surface)
+    typedef void     (*Surf_fn)(void*, void*);              // nativeSendSurfaceChangedEvent(env,thiz)
+    auto initJni       = (InitJni_fn)jniFindRegisteredNative("initJni");
+    auto nativeRender  = (Render_fn) jniFindRegisteredNative("nativeRender");
+    auto recreateGfx   = (Gfx_fn)    jniFindRegisteredNative("nativeRecreateGfxState");
+    auto surfaceChanged= (Surf_fn)   jniFindRegisteredNative("nativeSendSurfaceChangedEvent");
     void* il2cpp_init = libil2cpp->findSym("il2cpp_init");
-    compatLogFmt("unity: entry points — initJni=%p nativeRender=%p il2cpp_init=%p",
-                 (void*)initJni, (void*)nativeRender, il2cpp_init);
+    compatLogFmt("unity: entry points — initJni=%p nativeRender=%p recreateGfx=%p surfaceChanged=%p il2cpp_init=%p",
+                 (void*)initJni, (void*)nativeRender, (void*)recreateGfx, (void*)surfaceChanged, il2cpp_init);
 
     if (!initJni) {
         r.ok = false;
@@ -132,21 +136,46 @@ UnityLaunchResult unityRun(const std::string& lib_dir, const std::string& apk_pa
     compatLog("unity: initJni returned (did not fault)");
     compatLogFlush();
 
-    // If init survived, try one nativeRender to see how far the player loop gets
-    // before we've stood up a real GLES surface (expected to need
-    // nativeRecreateGfxState with a Surface first — this is purely diagnostic).
-    if (nativeRender) {
-        compatLog("unity: calling nativeRender() once (no surface yet — diagnostic)");
+    // ── 5. Stand up graphics + run the player loop (M5) ──────────────────────
+    // Unity creates its OWN EGL surface + context in nativeRecreateGfxState, so
+    // free the Core's SDL2 surface off the display window first (Switch EGL is
+    // one-surface-per-nwindow). Then feed Unity a Surface — our JNI
+    // ANativeWindow_fromSurface returns the real Switch nwindow for any
+    // non-null jobject, so the fake Activity doubles as the Surface here.
+    if (recreateGfx) {
+        compatUnityReleaseWindow();
+        compatLog("unity: nativeRecreateGfxState(id=0, surface) — Unity builds its GL context");
         compatLogFlush();
-        jboolean cont = nativeRender(env, ctx);
-        compatLogFmt("unity: nativeRender returned %d", (int)cont);
+        recreateGfx(env, ctx, 0, ctx);
+        compatLog("unity: nativeRecreateGfxState returned");
+        if (surfaceChanged) { surfaceChanged(env, ctx); compatLog("unity: nativeSendSurfaceChangedEvent returned"); }
+        compatLogFlush();
+    } else {
+        compatLog("unity: nativeRecreateGfxState not registered — can't set up graphics");
     }
 
-    r.ok = false;
-    r.errorStage  = "Unity player init (in progress)";
-    r.errorDetail = "initJni was driven — see compat_log.txt for the JNI callbacks Unity "
-                    "made and where it stopped. UnityPlayer/Activity Java shims and the "
-                    "GLES3 surface are the next milestones.";
-    compatLog("═══ AHNX Unity Runtime: initJni driven; see JNI callback trace above ═══");
+    // Player loop. Unity's Android nativeRender presents via its own EGL context
+    // (swaps internally), so we just call it each frame. Cap the run so a stuck
+    // loop still ends and flushes a log rather than hanging forever; log cadence
+    // is sparse to avoid the per-frame logging cost.
+    if (nativeRender) {
+        compatLog("unity: entering nativeRender loop");
+        compatLogFlush();
+        int frame = 0, stop = 0;
+        for (; frame < 100000; frame++) {
+            jboolean keep = nativeRender(env, ctx);
+            if (frame == 0 || frame == 5 || frame == 30 || (frame % 300) == 0)
+                compatLogFmt("unity: nativeRender frame %d -> keep=%d", frame, (int)keep);
+            if (!keep) { stop = 1; break; }
+        }
+        compatLogFmt("unity: nativeRender loop ended at frame %d (%s)",
+                     frame, stop ? "game asked to stop" : "hit frame cap");
+        r.ok = (frame > 30);  // got a meaningful run of frames = we're rendering
+    }
+
+    r.errorStage  = r.ok ? nullptr : "Unity player loop";
+    r.errorDetail = r.ok ? "" : "Graphics/render sequence was driven — see compat_log.txt "
+                                "for the EGL setup and how many frames nativeRender ran.";
+    compatLog("═══ AHNX Unity Runtime: render sequence driven; see EGL + frame trace above ═══");
     return r;
 }
