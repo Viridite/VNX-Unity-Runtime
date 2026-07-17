@@ -1,8 +1,8 @@
 # VNX Unity Runtime
 
-The **Unity IL2CPP runtime layer** for [Viridite](https://github.com/AndroidHorizon/AndroidHorizonNX) — the piece that boots Unity games on a Nintendo Switch.
+The **Unity IL2CPP runtime layer** for [Viridite](https://github.com/Viridite/Viridite) — the piece that boots Unity games on a Nintendo Switch.
 
-It lives in its own repo for browsability, but it isn't a standalone program: it's compiled straight into [VNX-Translation-Core](https://github.com/AndroidHorizon/VNX-Translation-Core) as a git submodule and calls back into the Core's ELF loader, JNI environment, and logging rather than duplicating any of it.
+It lives in its own repo for browsability, but it isn't a standalone program: it's compiled straight into [VNX-Translation-Core](https://github.com/Viridite/VNX-Translation-Core) as a git submodule and calls back into the Core's ELF loader, JNI environment, and logging rather than duplicating any of it.
 
 > **Status: very early.** This currently boots the Unity native libraries and runs their `JNI_OnLoad` handlers, then stops at the edge of what's implemented and reports cleanly. No Unity game runs yet. See [Milestones](#milestones).
 
