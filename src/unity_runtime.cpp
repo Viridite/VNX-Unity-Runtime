@@ -120,6 +120,10 @@ UnityLaunchResult unityRun(const std::string& lib_dir, const std::string& apk_pa
     // JNI env — so even when this faults, compat_log.txt becomes the exact list
     // of Java framework surface Unity needs next. jobject 0x4001 is the same
     // fake Activity the Core hands the cocos2d-x path.
+    // Turn on the Android Java object model — Unity's first frame reads config
+    // through Android reflection. This flag keeps it dormant for cocos2d-x games.
+    jniSetUnityMode(true);
+
     JNIEnv* env = (JNIEnv*)compatGet()->env_outer;
     void*   ctx = (void*)(uintptr_t)0x4001;   // fake Activity/Context
     compatLog("unity: calling initJni(env, activity, context) — Unity init begins");
