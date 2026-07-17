@@ -1,6 +1,6 @@
 # AHNX Unity Runtime
 
-The **Unity IL2CPP runtime layer** for [Android Horizon NX](https://github.com/AndroidHorizon/AndroidHorizonNX) — the piece that boots Unity games on a Nintendo Switch.
+The **Unity IL2CPP runtime layer** for [Verdite](https://github.com/AndroidHorizon/AndroidHorizonNX) — the piece that boots Unity games on a Nintendo Switch.
 
 It lives in its own repo for browsability, but it isn't a standalone program: it's compiled straight into [AHNX-Translation-Core](https://github.com/AndroidHorizon/AHNX-Translation-Core) as a git submodule and calls back into the Core's ELF loader, JNI environment, and logging rather than duplicating any of it.
 
@@ -42,4 +42,4 @@ Development is log-driven: each increment ships in a build, runs on real hardwar
 
 ## License
 
-Same as the rest of Android Horizon — see the umbrella project.
+Same as the rest of Verdite — see the umbrella project.
